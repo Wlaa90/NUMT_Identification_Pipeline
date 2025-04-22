@@ -1,0 +1,25 @@
+# 1. Align paired-end reads to the mitogenome reference 
+bwa mem -t 8 reference.fa reads_1.fastq reads_2.fastq > aligned.sam 
+# 2. Convert SAM to BAM and filter for high-quality, primary alignments 
+samtools view -b -F 4 -q 30 -F 256 -F 2048 aligned.sam > filtered.bam 
+# 3. Convert BAM to BED format 
+bedtools bamtobed -i filtered.bam > numt_candidates.bed 
+# 4. Cluster reads that are within 1000 bp of each other 
+bedtools cluster -d 1000 -i numt_candidates.bed > clustered_numts.bed 
+# 5. Extract paired FASTQ reads from clustered intervals 
+bedtools bamtofastq -i filtered.bam -bed clustered_numts.bed \ 
+-fq numt_reads_R1.fastq -fq2 numt_reads_R2.fastq 
+# 6. Assemble paired-end reads into contigs using SPAdes 
+spades.py -1 numt_reads_R1.fastq -2 numt_reads_R2.fastq -o spades_output 
+# 7. Align assembled contigs to mitogenome using BLASTN 
+blastn -query spades_output/contigs.fasta -subject reference.fa \ 
+-out numt_align.out -task dc-megablast -dust no -outfmt 6 
+# 8. Filter BLAST hits using Python 
+python parse_blast.py numt_align.out > filtered_numts.fa 
+# 9. Align filtered NUMTs to nuclear genome to confirm nuclear origin 
+blastn -query filtered_numts.fa -subject nuclear_genome.fa \ 
+-out nuclear_hits.out -task dc-megablast -dust no -outfmt 6 
+# 10. Convert to BED and merge overlapping nuclear hits 
+cut -f2,9,10 nuclear_hits.out | awk '{if ($2<$3) print $1"\t"$2"\t"$3; else print $1"\t"$3"\t"$2}' \ 
+| sort -k1,1 -k2,2n > nuclear_hits.bed 
+bedtools merge -i nuclear_hits.bed > unique_numt_regions.bed
